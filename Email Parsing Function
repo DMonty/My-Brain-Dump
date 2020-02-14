@@ -1,0 +1,164 @@
+Function Parse-Emails{
+
+<#
+.SYNOPSIS
+    Parse-Emails
+
+.DESCRIPTION
+     Creates a GUI allowing a Cut & Paste import of UPN addresses.
+     Uses Winforms to build the GUI. The input textbox supports Approx: 1000 entries
+     Import supports CSV and values separated by carriage returns.
+     Leading and trailing spaces are removed.
+     NON-UPN (i.e. Flat) and duplicated addresses are removed. 
+     Regex pattern tested on Regex101.com. 
+     Parsed results are diplayed on screen.
+     Parsed values are also stored in $ParsedValues for repeated use if needed
+     CAN BE USED WITHIN A PIPE with any CMDLET supporting email/UPN as Idenity
+
+.EXAMPLE
+    C:\PS> Parse-Emails 
+    <"Creates a GUI that will accept about 1000 rows. Displays array of values to the screen.">
+
+.EXAMPLE
+    C:\PS> Parse-Emails | Get-Recipient 
+    <"Directly pipes the values returned against Get-Recipient. Returns a 1 to 1 for all matches">
+
+.EXAMPLE
+    C:\PS> Parse-Emails -CustomTitle <"Shows up in the title bar of the GUI"> -CustomLabel <"Shows up in the body of the GUI">
+    <"Used exclusively for programmatic purposes, to provide instruction and purpose when called within this module.">
+
+
+.NOTES
+    Author: David J. Montalvo
+    email:  david.john.montalvo@gmail.com
+#>
+
+
+param(
+    [Parameter(Mandatory=$False,Position=0,HelpMessage="A custom title used for programmatic purposes.")]
+    [String]$CustomTitle,
+    [Parameter(Mandatory=$False,Position=1,HelpMessage="A custom label used for programmatic purposes.")]
+    [String]$CustomLabel
+)
+
+
+$Runspace = [runspacefactory]::CreateRunspace()
+$Runspace.ApartmentState = "STA"
+$Runspace.ThreadOptions = "ReuseThread"
+$Runspace.Open()
+
+If($CustomTitle.Trim() -ne ''){
+    $runspace.SessionStateProxy.SetVariable('Title',$CustomTitle.Trim())
+}
+Else{
+    $runspace.SessionStateProxy.SetVariable('Title','List Parser') 
+}
+
+If($CustomLabel.Trim() -ne ''){
+    $runspace.SessionStateProxy.SetVariable('Label',$CustomLabel.Trim())
+}
+Else{
+    $runspace.SessionStateProxy.SetVariable('Label','Paste a list of emails to parse here:') 
+}
+
+$PowerShell = [System.Management.Automation.PowerShell]::Create()
+$PowerShell.runspace = $Runspace
+
+   function RegX{
+     Param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ema
+     )
+
+     Return [regex]::Match( $ema, '([^:""(''<>\s]+@[^""<>\s]+\.[^""''<>%)\s]+)' ).Value.Trim()
+
+}
+
+$outputVals = $null
+
+[void]$PowerShell.AddScript({
+
+    [void] [System.Reflection.Assembly]::LoadWithPartialName( "System.Drawing" ) 
+    [void] [System.Reflection.Assembly]::LoadWithPartialName( "System.Windows.Forms" ) 
+
+    $objForm = New-Object System.Windows.Forms.Form
+    $objForm.Text = $Title
+    $objForm.Size = New-Object System.Drawing.Size( 400,300 ) 
+    $objForm.StartPosition = "CenterScreen"
+    $objForm.SizeGripStyle = 'Hide'
+    $objForm.AutoScroll = $True
+    $objForm.AutoSize = $True
+    $objForm.minimumSize = New-Object System.Drawing.Size( 400,300 ) 
+    $objForm.maximumSize = New-Object System.Drawing.Size( 400,300 ) 
+    $objForm.KeyPreview = $True
+    $objForm.Add_KeyDown( {if ($_.KeyCode -eq "Enter" ) 
+        {$x=$objTextBox.Text;$objForm.Close()}})
+    $objForm.Add_KeyDown( {if ($_.KeyCode -eq "Escape" ) 
+        {$objForm.Close()}})
+
+    $OKButton = New-Object System.Windows.Forms.Button
+    $OKButton.Location = New-Object System.Drawing.Size( 300,20 )
+    $OKButton.Size = New-Object System.Drawing.Size( 75,23 )
+    $OKButton.Text = "Parse"
+    $OKButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $OKButton.Add_Click( {$objForm.Close()} )
+    $objForm.AcceptButton = $OKButton
+    $objForm.Controls.Add( $OKButton )
+
+    $CancelButton = New-Object System.Windows.Forms.Button
+    $CancelButton.Location = New-Object System.Drawing.Size( 300,45 )
+    $CancelButton.Size = New-Object System.Drawing.Size( 75,23 )
+    $CancelButton.Text = "Cancel"
+    $CancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $CancelButton.Add_Click( {$objForm.Close()} )
+    $objForm.CancelButton = $CancelButton
+    $objForm.Controls.Add( $CancelButton )
+
+    $objLabel = New-Object System.Windows.Forms.Label
+    $objLabel.Location = New-Object System.Drawing.Size( 10,20 ) 
+    $objLabel.Size = New-Object System.Drawing.Size( 280,20 ) 
+    $objLabel.AutoSize = $True
+    $objLabel.Text = $Label
+    $objForm.Controls.Add( $objLabel ) 
+
+    $objTextBox = New-Object System.Windows.Forms.TextBox 
+    $objTextBox.Location = New-Object System.Drawing.Size( 10,40 ) 
+    $objTextBox.Size = New-Object System.Drawing.Size( 280,200 ) 
+    $objTextBox.AutoSize = $True
+    $objTextBox.AcceptsReturn = $False
+    $objTextBox.Multiline = $True
+    $objTextBox.ScrollBars = 'Vertical'
+    $objForm.Controls.Add( $objTextBox ) 
+
+    $objForm.Topmost = $True
+    $objForm.Add_Shown( {$objForm.Activate()} )
+    $result = $objForm.ShowDialog()
+    $objForm.Close()
+    $objForm.Dispose()
+
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+    {
+        $objTextBox.Lines
+    }
+})
+
+$AsyncObject = $PowerShell.BeginInvoke()
+$InputVals = $PowerShell.EndInvoke($AsyncObject)
+$PowerShell.Dispose()
+
+if($InputVals.Count -ige 1){
+    $InputVals = ((($InputVals -split ",")-split ";")-split " ").trim() | Select -uniq | ? {$_}
+    $outputVals = foreach($input in $InputVals){
+        [string]$emailAddr = RegX $input
+        $emailAddr
+    }
+    $outputVals = $outputVals | Select -uniq | ? {$_}
+}
+
+$Runspace.Dispose()
+$PowerShell.runspace.Dispose()
+$Global:ParsedValues = $OutputVals
+Write-Host 'Your parsed values are stored in the $ParsedValues variable.' -ForegroundColor Yellow
+Return $OutputVals
+}
