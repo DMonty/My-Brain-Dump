@@ -7,6 +7,9 @@ To deal with this I have written a function which employs a GUI allowing this in
 For anyone not needing this type of script there are still some examples which may be beneficial so see. 
 
 •	The GUI is created using Winforms. It would not be difficult to repurpose.
+
 •	GUIs can create threading issues when run in PowerShell resulting in the shell window crashing. This script provides an example on how to run a Multithreaded (MTA) GUI within a single threaded PowerShell instance (STA) using & managing runspaces.
+
 •	You will find a Regex example who showing how to deal with varying string formats I have seen clients submit.
+
 •	You will also see how strings can be managed to deal with empty rows, concatenated CSV strings, mixed strings with carriage returns and CSV, display name email addresses (i.e. descriptive name <emailname@somerandomservice.com>)
