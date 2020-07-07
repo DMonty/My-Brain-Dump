@@ -1,5 +1,7 @@
 # GUI Alternative to Import-CSV
 
+See "Email Parsing Function"
+
 We have all been there, particularly as Administrators, someone sends a list of hundreds of accounts by name, email or some ID and requires either to pull information or to take an action. The information they supply must usually be cleaned and standardized, converted unto CSVs, saved to a file, then imported into PowerShell. This is repetitive and can turn a simple request into a lengthy process. 
 
 To deal with this I have written a function which employs a GUI allowing this information to be cut & pasted directly into a variable. 
