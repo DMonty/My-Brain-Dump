@@ -1,0 +1,505 @@
+#Constants, used by all functions. 
+$global:NoteSess = $null
+$global:DominoSrv = "" 
+$global:NAB = "names.nsf"
+
+function ArrayWiz{
+      Param(
+            [Parameter(Mandatory=$true,Position=0,HelpMessage="The target array to modify")]
+            [ValidateNotNullOrEmpty()]
+            [array]$SourceArray,
+            
+            [Parameter(Mandatory=$true,Position=1,HelpMessage="An array containing the elements to be used to add or remove elements from SourceArray")]
+            [ValidateNotNullOrEmpty()]
+            [array]$AddReplaceArray,
+            
+            [Parameter(Mandatory=$true,Position=2,HelpMessage="The mode of operation to apply to the array: ""Add"" or ""Remove""")]
+            [ValidateNotNullOrEmpty()]
+            [ValidateSet("Add","Remove")]
+            [String]$Mode     
+      )
+      
+      switch( $Mode ){
+            "Add" {
+                  $Members = New-Object -TypeName System.Collections.ArrayList( ,$SourceArray )
+                  foreach( $ele in $AddReplaceArray ){
+                        $nn = cNotesName($ele.Trim())
+                        if($nn.IsHierarchical){
+                              [void]$Members.Add( $nn.Canonical )
+                        }
+                        Else{
+                              [void]$Members.Add( $nn.Abbreviated )
+                        }
+                  }
+                  Return $Members.ToArray()
+            }
+      
+            "Remove" {
+                  $Members = New-Object -TypeName System.Collections.ArrayList( ,$SourceArray )
+                        foreach( $ele in $AddReplaceArray ){
+                              $nn = cNotesName($ele.Trim())
+                              if($nn.IsHierarchical){
+                                    [void]$Members.Remove( $nn.Canonical )
+                              }
+                              Else{
+                                    [void]$Members.Remove( $nn.Abbreviated )
+                              }
+                        }
+                        Return $Members.ToArray()
+            }
+      }
+}
+
+function cNotesName{
+      Param(
+            [Parameter(Mandatory=$true,Position=0,HelpMessage="An Idenity to convert to the Domino Notes Name Data Type")]
+            [ValidateNotNullOrEmpty()]
+            [string]$NotesName
+      )
+      Return $global:NoteSess.CreateName( $NotesName )
+}
+
+function Get-DatabaseObj{
+      Param(
+            [Parameter(Mandatory=$true,Position=0,HelpMessage="The name of the Domino Server from which to retrieve the Domino Database")]
+            [ValidateNotNullOrEmpty()]
+            [string]$DominoServer,
+            
+            [Parameter(Mandatory=$true,Position=1,HelpMessage="The filename of Domino database: For example ""names.nsf""")]
+            [ValidateNotNullOrEmpty()]
+            [string]$DominoDatabase,
+            
+            [Parameter(Mandatory=$true,Position=2,HelpMessage="The view within the Domino database to query: For example ""People""")]
+            [ValidateNotNullOrEmpty()]
+            [string]$DominoView
+      )
+      
+      Try{
+            $db_Obj = $global:NoteSess.GetDatabase( $DominoServer,$DominoDatabase,$False )
+            $view_Obj = $db_Obj.GetView( $DominoView )
+            $view_Obj.AutoUpdate = $false
+            Return $view_Obj
+      }
+      Catch
+      {
+            $_.Exception.Message
+            Exit 1
+      }     
+}
+
+function Get-DominoSession{
+<#
+.SYNOPSIS
+    Get-DominoSession
+.DESCRIPTION
+    Establishes the Lotus Notes session. Password and Server Name are mandatory, both values will be prompted for by the function.  
+.EXAMPLE
+      Get-DominoSession
+      
+      Description:
+    Launching this function will immediately initiate a secure prompt for password and make a subsequent request for the Server on which to open the session. Additionally
+    the function will vet access against the Name and Address book to ensure the session has sufficient privileges. 
+    
+.NOTES
+    Author: David J. Montalvo
+    email:  david.j.montalvo@gmail.com
+#>
+      [System.Security.SecureString]$SecurePW = read-host -AsSecureString "Please enter your password:"
+      
+      $global:NoteSess = New-Object -ComObject Lotus.NotesSession
+      
+      try{
+        $global:NoteSess.Initialize( [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePW)) )
+      }
+      Catch{
+        $global:NoteSess = $null
+        Write-Host "Invalid Password. Session has not been initialized" -foregroundcolor "red"
+        break
+      } 
+      
+      $global:DominoSrv = Read-Host "Please enter the name of the Server on which to open a Notes Session:"
+      
+      Write-Host "Using credentials for ""$($global:NoteSess.UserName)""" -ForegroundColor green
+      
+      $db = $global:NoteSess.GetDatabase( $global:DominoSrv,$global:NAB, $False )
+      
+      if($db -eq $null){
+        Write-Host "Unable to open a session with server: $($global:DominoSrv)" -foregroundcolor "red"
+        Exit 1
+      }
+      
+      If ($db.QueryAccess($global:NoteSess.UserName) -lt 4){
+          Write-Host "$($global:NoteSess.UserNameObject.Abbreviated) has insufficient privileges to create records: Editor access or greater is required" -foregroundcolor "red"
+          Exit 1
+      }
+      
+      $roles = $db.QueryAccessRoles( $global:NoteSess.UserName )
+      
+      foreach($role in $roles){
+          switch($role) {
+                '[UserCreator]' 
+                      {
+                      Write-Host "$($global:NoteSess.UserNameObject.Abbreviated) has UserCreator rights." -ForegroundColor green 
+                      }
+                '[UserModifier]' 
+                      {
+                      Write-Host "$($global:NoteSess.UserNameObject.Abbreviated) has UserModifier rights." -ForegroundColor green
+                      }
+                '[GroupCreator]' 
+                      {
+                      Write-Host "$($global:NoteSess.UserNameObject.Abbreviated) has GroupCreator rights." -ForegroundColor green
+                      }
+                '[GroupModifier]' 
+                      {
+                      Write-Host "$($global:NoteSess.UserNameObject.Abbreviated) has GroupModifier rights." -ForegroundColor green
+                      }
+          }
+      }      
+}
+
+function Get-DominoDistributionList{
+<#
+.SYNOPSIS
+    Get-DominoDistributionList
+.DESCRIPTION
+    Retrieves common properties of a Domino Distribution Group. These are as follows:
+            
+            ListName            : [String]The Name of the Group (Internet address can be used for mail and multi-purpose groups. ACL Only groups must use the common name)
+            Members             : [Array]The Members of the Group. Returns an empty array empty
+            InternetAddress     : [String]The Internet Address. Returns Null if empty
+            ListDescription     : [String]The description of the Group. Returns Null if empty
+            GroupType           : [String]The 'Type' of group: Mail Only, Multipurpose, ACL Only
+            MailDomain          : [String]The Mail Domain. Returns Null if empty
+            Comments            : [String]Comments. Returns Null if empty
+            ListOwner           : [Array]The Owner(s) of the Group. Returns Null if empty
+            LocalAdmin          : [Array]The Administrator(s) of the Group. Returns Null if empty
+            AvailableForDirSync : [String]Indicates if the Group is enabled for Directory Syncing
+            UpdatedBy           : [Array]Shows who last edited this group. Last updated by will be in element 0
+            
+.PARAMETER ListName
+     ListName: [String] Mandatory. The name of the Domino Distribution group to retrieve. Allows partial match
+.PARAMETER ExactMatch
+     ExactMatch: [Switch] Optional. Specify if you want to find an exact match. Only a single document which matches the key is returned.
+.EXAMPLE
+    C:\PS> Get-DominoDistributionList -ListName "MyGroupName" 
+    <Finds all groups starting with "MyGroupName*">
+.EXAMPLE
+      Get-DominoDistributionList -ListName "MtGroupName" -ExactMatch
+      <Returns an exact match for "MyGroupName">
+.NOTES
+    Author: David J. Montalvo
+    email:  david.j.montalvo@gmail.com
+#>
+      param(
+      [CmdletBinding(DefaultParameterSetName = "ListName")]
+      [Parameter(
+            Mandatory=$true,
+            parametersetname="ListName",
+            Position=0,
+            HelpMessage="The name of the Domino Distribution group to retrieve. Allows partial match"
+      )]
+      
+      [ValidateNotNullOrEmpty()]
+      [string]$ListName,
+      [parameter(Mandatory=$false,
+      Position=1,
+      HelpMessage="Optional. Specify if you want to find an exact match. Only a single document which matches the key is returned."
+      )]
+      [switch]$ExactMatch
+      )
+      
+      if( $global:NoteSess -eq $null ) {Get-DominoSession}
+      
+      $db = $global:NoteSess.GetDatabase( $global:DominoSrv,$global:NAB, $False )
+      $ListName = $ListName.Trim()
+      
+      If( (cnotesname $ListName).Addr821 -eq $ListName ){
+        $view = $db.GetView( '($users)' )
+      }
+      
+      else{
+        $view = $db.GetView( 'Groups' )
+      }
+      
+      $view.AutoUpdate = $false
+      
+      if($ExactMatch){
+            $docCollection = $view.GetAllDocumentsByKey($ListName,$true)
+      }
+      Else{
+            $docCollection = $view.GetAllDocumentsByKey($ListName,$false)
+      }
+      
+      $DominoObjs = New-Object -TypeName System.Collections.ArrayList
+      
+      if($docCollection.count -eq 0){
+            Return $null
+            Exit 1
+      }
+      
+      $doc = $docCollection.GetFirstDocument()
+      While($doc -ne $null){
+            $Obj = New-Object PsObject
+            $Obj | Add-Member -MemberType NoteProperty -Name "ListName" -Value $($doc.GetItemValue("ListName"))
+            $Obj | Add-Member -MemberType NoteProperty -Name "Members" -Value $doc.GetItemValue("Members")
+            $Obj | Add-Member -MemberType NoteProperty -Name "InternetAddress" -Value $($doc.GetItemValue("InternetAddress"))
+            $Obj | Add-Member -MemberType NoteProperty -Name "ListDescription" -Value $($doc.GetItemValue("ListDescription"))
+            switch ($($doc.GetItemValue("GroupType"))){
+                  "0"{$Obj | Add-Member -MemberType NoteProperty -Name "GroupType" -Value "Multi-purpose"}
+                  "1"{$Obj | Add-Member -MemberType NoteProperty -Name "GroupType" -Value "Mail only"}
+                  "2"{$Obj | Add-Member -MemberType NoteProperty -Name "GroupType" -Value "Access Control List only"}
+            }
+            $Obj | Add-Member -MemberType NoteProperty -Name "MailDomain" -Value $($doc.GetItemValue("MailDomain"))
+            $Obj | Add-Member -MemberType NoteProperty -Name "Comments" -Value $($doc.GetItemValue("Comments"))
+            $Obj | Add-Member -MemberType NoteProperty -Name "ListOwner" -Value $doc.GetItemValue("ListOwner")
+            $Obj | Add-Member -MemberType NoteProperty -Name "LocalAdmin" -Value $doc.GetItemValue("LocalAdmin")
+            switch ($($doc.GetItemValue("GroupType"))){
+                  "0"{$Obj | Add-Member -MemberType NoteProperty -Name "AvailableForDirSync" -Value "No"}
+                  "1"{$Obj | Add-Member -MemberType NoteProperty -Name "AvailableForDirSync" -Value "Yes"}
+            }
+            $Obj | Add-Member -MemberType NoteProperty -Name "UpdatedBy" -Value $doc.GetItemValue('$UpdatedBy')     
+            [void]$DominoObjs.Add($Obj)
+            $doc = $docCollection.GetNextDocument($doc)
+      }
+      Return $DominoObjs 
+}
+
+function Set-DominoDistributionList{
+<#
+.SYNOPSIS
+    Set-DominoDistributionList
+.DESCRIPTION
+    Modifies a Domino Distribution Group. All non-verb methods perform "Replace" actions, former values are NOT preserved. 
+      "Remove*" methods perform the same function as "Replace".
+      "Add*" methods use "Append" and will preserve former values.
+            
+.PARAMETER ListName
+     The Name of the Group object to return. 
+.PARAMETER RenameGroup
+     Renames the existing Domino Distribution Group with the value specified
+.PARAMETER AddMembers
+     Adds Members to the specified Domino Distribution Group
+.PARAMETER RemoveMembers
+     Removes Members from the specified Domino Distribution Group
+.PARAMETER InternetAddress
+     Replaces the existing InternetAddress
+.PARAMETER ListDescription
+     Replaces the existing ListDescription
+.PARAMETER GroupType
+     Changes the GroupType: Specify "Mail", "Multi", or "ACL"
+.PARAMETER MailDomain
+     Replaces the existing MailDomain
+.PARAMETER Comments
+     Replaces the existing Comments
+.PARAMETER AddListOwner
+     Adds Owners to the specified Domino Distribution Group
+.PARAMETER RemoveListOwners
+     Removes Owners from the specified Domino Distribution Group
+.PARAMETER AddLocalAdmin
+     Adds an Admin to the specified Domino Distribution Group    
+.PARAMETER RemoveLocalAdmin
+     Removes Admins from the specified Domino Distribution Group
+.PARAMETER AvailableForDirSync
+     Enables or Disables Directory Sync: Please specify true or false
+      
+.EXAMPLE
+    C:\PS> Set-DominoDistributionList -ListName "MyGroupName" -RenameGroup "MyGroupName Windows Team"
+    <"Opens the "MyGroupName" Group Object then renames the Group: "MyGroupName" -> "MyGroupName Windows Team">
+.EXAMPLE
+      C:\PS> Set-DominoDistributionList -ListName "MyGroupName" -AddMembers @("CN=David Montalvo\O=MyGroupName","CN=Some Guy\O=MyOrg") -Comments "I just added stuff"
+      <Opens the "MyGroupName" Group Object then appends 2 members and updates the comments">
+.EXAMPLE
+    C:\PS> Set-DominoDistributionList -ListName "MyGroupName" -GroupType "Multi"
+    <"Opens the "MyGroupName" Group Object then changes the GroupType: "Mail (i.e Mail Only)" -> "Multi (i.e. Multi-Purpose)"> -Comments "Client wants to use a Mail Only group for ACL access"
+.EXAMPLE
+    C:\PS> Set-DominoDistributionList -ListName "MyGroupName" -AvailableForDirSync "Yes"
+    <"Opens the "MyGroupName" Group Object then disables Directory Sync"
+
+.NOTES
+    Author: David J. Montalvo
+    email:  david.j.montalvo@gmail.com
+#>
+
+      Param(
+            [Parameter(Mandatory=$true,Position=0,HelpMessage="The name of the Domino Distribution group to retrieve and modify.")]
+            [ValidateNotNullOrEmpty()]
+            [string]$ListName,
+
+            [parameter(Mandatory=$false,HelpMessage="Renames the existing Domino Distribution Group with the value specified.")]
+            [ValidateNotNullOrEmpty()]
+            [String]$RenameGroup,
+            
+            [parameter(Mandatory=$false,HelpMessage="Adds Members to the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$AddMembers,
+            
+            [parameter(Mandatory=$false,HelpMessage="Removes Members from the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$RemoveMembers,
+            
+            [parameter(Mandatory=$false,HelpMessage="Replaces the existing InternetAddress")]
+            [ValidateNotNullOrEmpty()]
+            [String]$InternetAddress,
+            
+            [parameter(Mandatory=$false,HelpMessage="Replaces the existing ListDescription")]
+            [ValidateNotNullOrEmpty()]
+            [String]$ListDescription,
+            
+            [parameter(Mandatory=$false,HelpMessage="Changes the GroupType: Please specify ""Mail"", ""Multi"", or ""ACL""")]
+            [ValidateNotNullOrEmpty()]
+            [ValidateSet("Multi","Mail","ACL")]
+            [String]$GroupType,
+            
+            [parameter(Mandatory=$false,HelpMessage="Replaces the existing MailDomain")]
+            [ValidateNotNullOrEmpty()]
+            [String]$MailDomain,
+            
+            [parameter(Mandatory=$false,HelpMessage="Replaces the existing Comments")]
+            [ValidateNotNullOrEmpty()]
+            [String]$Comments,
+            
+            [parameter(Mandatory=$false,HelpMessage="Adds Owners to the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$AddListOwner,
+            
+            [parameter(Mandatory=$false,HelpMessage="Removes Owners from the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$RemoveListOwners,
+            
+            [parameter(Mandatory=$false,HelpMessage="Adds Admins to the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$AddLocalAdmin,
+            
+            [parameter(Mandatory=$false,HelpMessage="Removes Admins from the specified Domino Distribution Group")]
+            [ValidateNotNullOrEmpty()]
+            [Array]$RemoveLocalAdmin,
+            
+            [parameter(Mandatory=$false,HelpMessage='Enables or Disables Directory Sync: Please specify "Yes" or "No"')]
+            [ValidateNotNullOrEmpty()]
+            [ValidateSet("Yes","No")]
+            [String]$AvailableForDirSync
+      )
+      
+      if( $global:NoteSess -eq $null ) {Get-DominoSession}
+      
+      $db = $global:NoteSess.GetDatabase( $global:DominoSrv,$global:NAB, $False )
+      $ListName = $ListName.Trim()
+  
+      If( (cnotesname $ListName).Addr821 -eq $ListName ){
+        $view = $db.GetView( '($users)' )
+      }
+      else{
+        $view = $db.GetView( 'Groups' )
+      }
+      
+      $view.AutoUpdate = $false
+      
+      $doc = $view.GetDocumentByKey( $ListName ,$true )
+      
+      if($doc -eq $null){
+            Return $null
+            Write-Host "Unable to locate Group using value: $($ListName)" -foregroundcolor "red"
+            Exit 1
+      }
+      Else{ 
+            if( $RenameGroup.Trim().length -gt 0 ){
+                  $nn = cNotesName($mem.Trim())
+                        if($nn.IsHierarchical){
+                              $PendingUpdate = $doc.ReplaceItemValue( 'ListName',$nn.Canonical )
+                        }
+                        Else{
+                              $PendingUpdate = $doc.ReplaceItemValue( 'ListName',$nn.Abbreviated )
+                        }
+            }
+            
+            if( $AddMembers -ne $null ){
+                if( $AddMembers -isNot [system.array] ){
+                    Write-Host "Error: Unable to add members. Value passed is not an array." -ForegroundColor 'red'
+                    break
+                }
+                  $Members = arraywiz -SourceArray $doc.GetItemValue( 'Members' ) -AddReplaceArray $AddMembers -Mode Add
+                  $PendingUpdate = $doc.ReplaceItemValue( 'Members',$Members )
+            }
+            
+            if( $RemoveMembers -ne $null ){
+                if( $RemoveMembers -isNot [system.array] ){
+                    Write-Host "Error: Unable to remove members. Value passed is not an array." -ForegroundColor 'red'
+                    break
+                }
+                  $Members = arraywiz -SourceArray $doc.GetItemValue( 'Members' ) -AddReplaceArray $RemoveMembers -Mode Remove
+                  $PendingUpdate = $doc.ReplaceItemValue( 'Members',$Members )
+            }
+
+            if( $InternetAddress.Trim().length -gt 0 ){
+                  $PendingUpdate = $doc.ReplaceItemValue( 'InternetAddress',$InternetAddress.Trim() )
+            }
+            
+            if( $ListDescription.Trim().length -gt 0 ){
+                  $PendingUpdate = $doc.ReplaceItemValue( 'ListDescription',$ListDescription.Trim() )
+            }
+            
+            if( $GroupType.Trim().length -gt 0 ){
+                  switch ( $GroupType ){
+                        "Multi"     {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"0" )}
+                        "Mail"      {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"1" )}
+                        "ACL" {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"2" )}
+                  }
+            }
+            
+            if( $MailDomain.Trim().length -gt 0 ){
+                  $PendingUpdate = $doc.ReplaceItemValue( 'MailDomain',$MailDomain.Trim() )
+            }
+            
+            if( $Comments.Trim().length -gt 0 ){
+                  $RichTxt = doc.GetFirstItem( "Comments" )
+                  if($RichTxt.Type -eq 1){
+                        $PendingUpdate = $RichTxt.AppendText( $Comments.Trim() )
+                  }
+                  Else{
+                        $PendingUpdate = $doc.ReplaceItemValue( 'Comments',$Comments.Trim() )             
+                  }     
+            }
+            
+            if( $AddListOwner -ne $null ){
+                  $Owners = arraywiz -SourceArray $doc.GetItemValue( 'ListOwner' ) -AddReplaceArray $AddListOwner -Mode Add
+                  $PendingUpdate = $doc.ReplaceItemValue( 'ListOwner',$Owners )
+            }
+            
+            if( $RemoveListOwners -ne $null ){
+                  $Owners = arraywiz -SourceArray $doc.GetItemValue( 'ListOwner' ) -AddReplaceArray $RemoveListOwners -Mode Remove
+                  $PendingUpdate = $doc.ReplaceItemValue( 'ListOwner',$Owners )
+            }
+            
+            if( $AddLocalAdmin -ne $null ){
+                  $Admins = arraywiz -SourceArray $doc.GetItemValue( '$LocalAdmin' ) -AddReplaceArray $AddLocalAdmin -Mode Add
+                  $PendingUpdate = $doc.ReplaceItemValue( 'LocalAdmin',$Admins )
+            }
+            
+            if( $RemoveLocalAdmin -ne $null ){
+                  $Admins = arraywiz -SourceArray $doc.GetItemValue( '$LocalAdmin' ) -AddReplaceArray $RemoveLocalAdmin -Mode Remove
+                  $PendingUpdate = $doc.ReplaceItemValue( '$LocalAdmin',$Admins )
+            }
+            
+            if( $GroupType.Trim().length -gt 0 ){
+                  switch ( $GroupType ){
+                        "Multi"     {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"0" )}
+                        "Mail"      {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"1" )}
+                        "ACL" {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"2" )}
+                  }
+            }
+            
+            if( $AvailableForDirSync.Trim().length -gt 0 ){
+                  switch ( $AvailableForDirSync ){
+                        "Yes" {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"1" )}
+                        "No"  {$PendingUpdate = $doc.ReplaceItemValue( 'GroupType',"0" )}
+                  }
+            }
+                  
+            if($PendingUpdate.SaveToDisk -eq $true){
+                  $success = $doc.ComputeWithForm( $False, $False )
+                  if( $success -eq $true ){
+                        [void]$doc.Save( $true,$false,$false )    
+                  }
+            }                 
+      }
+}
