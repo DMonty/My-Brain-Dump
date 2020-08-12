@@ -1,0 +1,36 @@
+# For Example Puposes Only
+# A Fun and practical example of defining Dynamic Parameters in functions
+
+    [Reflection.Assembly]::LoadWithPartialName('System.Speech')
+    $SpeechSynthesizer = New-Object System.Speech.Synthesis.SpeechSynthesizer 
+
+Function New-Speech{
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$True,Position=2,HelpMessage="Text to sent to the SpeechSynthesizer")]
+        [String]$Words2Speak
+    )
+ 
+    DynamicParam {
+        $ParameterName = 'Voice'
+        $RuntimeParameterDictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
+        $AttributeCollection = New-Object System.Collections.ObjectModel.Collection[System.Attribute]
+        $ParameterAttribute = New-Object System.Management.Automation.ParameterAttribute
+        $ParameterAttribute.Mandatory = $true
+        $ParameterAttribute.Position = 1
+        $AttributeCollection.Add($ParameterAttribute)
+        $arrSet = ($SpeechSynthesizer.GetInstalledVoices().VoiceInfo).Name
+        $ValidateSetAttribute = New-Object System.Management.Automation.ValidateSetAttribute($arrSet)
+        $AttributeCollection.Add($ValidateSetAttribute)
+        $RuntimeParameter = New-Object System.Management.Automation.RuntimeDefinedParameter($ParameterName, [string], $AttributeCollection)
+        $RuntimeParameterDictionary.Add($ParameterName, $RuntimeParameter)
+        return $RuntimeParameterDictionary
+    }
+
+    begin {$Voice = $PsBoundParameters[$ParameterName]}
+
+    process {
+        $SpeechSynthesizer.SelectVoice($Voice)
+        $SpeechSynthesizer.Speak($Words2Speak)
+    }
+}
